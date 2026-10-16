@@ -14,6 +14,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -416,6 +417,39 @@ public final class SystemVulkanDriver {
                 Build.VERSION.SDK_INT, environment);
     }
 
+    /** Probe used by hybrisLibraryPath; isolated so tests can inject a filesystem. */
+    static boolean pathExists(String path) {
+        return new File(path).isDirectory();
+    }
+
+    /**
+     * Search path for the vendor HAL's Android dependencies. Newer Android releases moved
+     * bionic and VNDK libraries out of /system/lib64 into APEX modules; on Android 17
+     * (Xiaomi XRING silicon) libm.so, liblog.so, libsync.so and friends only exist under
+     * /apex, so the fixed framework paths alone cannot resolve the HAL's DT_NEEDED entries
+     * and libhybris aborts before the driver finishes loading.
+     */
+    static String hybrisLibraryPath(Predicate<String> present) {
+        LinkedHashSet<String> dirs = new LinkedHashSet<>(List.of(
+                "/system/lib64", "/system_ext/lib64", "/odm/lib64",
+                "/vendor/lib64/egl", "/vendor/lib64/hw", "/vendor/lib64",
+                "/apex/com.android.runtime/lib64/bionic",
+                "/apex/com.android.graphics/lib64",
+                "/apex/com.android.graphics/lib64/hw",
+                "/apex/com.android.wifi/lib64",
+                "/apex/com.android.resolv/lib64"));
+        // VNDK APEXes are versioned per API level; probe the known range.
+        for (int version = 27; version <= 45; version++)
+            dirs.add("/apex/com.android.vndk.v" + version + "/lib64");
+        StringBuilder path = new StringBuilder();
+        for (String dir : dirs)
+            if (present.test(dir)) {
+                if (path.length() > 0) path.append(':');
+                path.append(dir);
+            }
+        return path.toString();
+    }
+
     static void addEnvironment(File directory, String hal, String node, int sdk, List<String> environment) {
         Profile selected = resolveProfile(hal);
         if (selected == null) throw new IllegalStateException("System Vulkan driver is unavailable");
@@ -427,7 +461,7 @@ public final class SystemVulkanDriver {
         environment.add("HYBRIS_VULKAN_HAL=" + hal);
         environment.add("HYBRIS_LINKER_DIR=" + new File(directory, "lib/libhybris/linker").getPath());
         // Prefer framework dependencies for the system Vulkan loader, including libbase.so.
-        environment.add("HYBRIS_LD_LIBRARY_PATH=/system/lib64:/system_ext/lib64:/vendor/lib64/egl:/vendor/lib64/hw:/vendor/lib64");
+        environment.add("HYBRIS_LD_LIBRARY_PATH=" + hybrisLibraryPath(SystemVulkanDriver::pathExists));
         String layerPath = new File(directory, "lib").getPath();
         if (selected.extraLayerPath != null) layerPath += ":" + selected.extraLayerPath;
         environment.add("VK_LAYER_PATH=" + layerPath);

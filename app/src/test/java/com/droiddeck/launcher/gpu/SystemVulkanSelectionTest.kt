@@ -130,6 +130,31 @@ class SystemVulkanSelectionTest {
         }
     }
 
+    @Test fun libraryPathIncludesExistingPathsAndSkipsMissingOnes() {
+        val existing = setOf(
+            "/system/lib64", "/vendor/lib64/hw",
+            "/apex/com.android.runtime/lib64/bionic", "/apex/com.android.vndk.v37/lib64")
+        val path = SystemVulkanDriver.hybrisLibraryPath(existing::contains)
+        val entries = path.split(':')
+        // Framework paths stay first, ahead of the APEX modules.
+        assertEquals("/system/lib64", entries.first())
+        assertTrue(entries.containsAll(existing))
+        // A missing path (here: everything not in the set) must not appear.
+        assertFalse(entries.contains("/apex/com.android.vndk.v36/lib64"))
+        assertEquals(existing.size, entries.size)
+    }
+
+    @Test fun libraryPathCoversApexedBionicAndVndkLibraries() {
+        // Everything "exists": the composed path must contain the Android 17 APEX
+        // module paths that hold libm.so, liblog.so, libsync.so and friends.
+        val path = SystemVulkanDriver.hybrisLibraryPath { true }
+        val entries = path.split(':')
+        assertTrue(entries.contains("/apex/com.android.runtime/lib64/bionic"))
+        assertTrue(entries.contains("/apex/com.android.vndk.v37/lib64"))
+        assertTrue(entries.contains("/vendor/lib64/egl"))
+        assertTrue(entries.indexOf("/system/lib64") < entries.indexOf("/apex/com.android.vndk.v37/lib64"))
+    }
+
     @Test fun halNamePolicyKnowsEveryFixedVendorAndDenylistEntry() {
         for (profile in SystemVulkanDriver.Profile.values()) {
             val vendor = profile.halPath.substringAfter("vulkan.").removeSuffix(".so")
