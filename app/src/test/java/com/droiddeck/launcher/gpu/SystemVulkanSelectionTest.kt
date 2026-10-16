@@ -147,8 +147,8 @@ class SystemVulkanSelectionTest {
         try {
             assertNull("no HALs at all", SystemVulkanDriver.scanVendorVulkanHal(dir))
             File(dir, "vulkan.xring.so").writeText("hal")
-            assertEquals("/vendor/lib64/hw/vulkan.xring.so".substringAfterLast('/'),
-                SystemVulkanDriver.scanVendorVulkanHal(dir)!!.substringAfterLast('/'))
+            assertEquals("vulkan.xring.so",
+                File(SystemVulkanDriver.scanVendorVulkanHal(dir)!!).name)
             // A second unknown HAL is ambiguous and must fail closed.
             File(dir, "vulkan.custom.so").writeText("hal")
             assertNull("two unknown HALs are ambiguous", SystemVulkanDriver.scanVendorVulkanHal(dir))

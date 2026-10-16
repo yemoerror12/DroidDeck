@@ -422,7 +422,9 @@ public final class SystemVulkanDriver {
         if (selected.requiresRenderNode && node == null)
             throw new IllegalStateException("System " + selected.gpuName + " render node is unavailable");
         environment.add("HYBRIS_ANDROID_SDK_VERSION=" + sdk);
-        environment.add("HYBRIS_VULKAN_HAL=" + selected.halPath);
+        // Forward the actual HAL path: a discovered Mali HAL does not sit at the profile's
+        // fixed location, and libhybris must load the file that really exists.
+        environment.add("HYBRIS_VULKAN_HAL=" + hal);
         environment.add("HYBRIS_LINKER_DIR=" + new File(directory, "lib/libhybris/linker").getPath());
         // Prefer framework dependencies for the system Vulkan loader, including libbase.so.
         environment.add("HYBRIS_LD_LIBRARY_PATH=/system/lib64:/system_ext/lib64:/vendor/lib64/egl:/vendor/lib64/hw:/vendor/lib64");
