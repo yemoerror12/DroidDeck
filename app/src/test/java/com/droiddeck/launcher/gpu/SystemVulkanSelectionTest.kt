@@ -130,6 +130,60 @@ class SystemVulkanSelectionTest {
         }
     }
 
+    @Test fun halNamePolicyKnowsEveryFixedVendorAndDenylistEntry() {
+        for (profile in SystemVulkanDriver.Profile.values()) {
+            val vendor = profile.halPath.substringAfter("vulkan.").removeSuffix(".so")
+            assertTrue(vendor, SystemVulkanDriver.isKnownHalName(vendor))
+        }
+        for (vendor in listOf("adreno", "samsung", "powervr", "mtk", "swiftshader"))
+            assertTrue(vendor, SystemVulkanDriver.isKnownHalName(vendor))
+        // The XRING silicon's HAL name is not a known vendor entry; discovery must see it.
+        assertFalse(SystemVulkanDriver.isKnownHalName("xring"))
+        assertFalse(SystemVulkanDriver.isKnownHalName(null))
+    }
+
+    @Test fun vendorHalScanAcceptsExactlyOneUnknownCandidate() {
+        val dir = Files.createTempDirectory("vendor-hw").toFile()
+        try {
+            assertNull("no HALs at all", SystemVulkanDriver.scanVendorVulkanHal(dir))
+            File(dir, "vulkan.xring.so").writeText("hal")
+            assertEquals("/vendor/lib64/hw/vulkan.xring.so".substringAfterLast('/'),
+                SystemVulkanDriver.scanVendorVulkanHal(dir)!!.substringAfterLast('/'))
+            // A second unknown HAL is ambiguous and must fail closed.
+            File(dir, "vulkan.custom.so").writeText("hal")
+            assertNull("two unknown HALs are ambiguous", SystemVulkanDriver.scanVendorVulkanHal(dir))
+            // Known vendor names never count as discovery candidates.
+            dir.listFiles()?.forEach { it.delete() }
+            File(dir, "vulkan.adreno.so").writeText("hal")
+            File(dir, "vulkan.samsung.so").writeText("hal")
+            assertNull("known vendors are not discovery candidates", SystemVulkanDriver.scanVendorVulkanHal(dir))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test fun discoveredMaliHalResolvesToTheMaliPolicy() {
+        try {
+            assertNull(SystemVulkanDriver.resolveProfile("/vendor/lib64/hw/vulkan.xring.so"))
+            SystemVulkanDriver.discoveredMaliHal = "/vendor/lib64/hw/vulkan.xring.so"
+            assertEquals(SystemVulkanDriver.Profile.MALI,
+                SystemVulkanDriver.resolveProfile("/vendor/lib64/hw/vulkan.xring.so"))
+            val env = mutableListOf<String>()
+            SystemVulkanDriver.addEnvironment(File("/runtime"), "/vendor/lib64/hw/vulkan.xring.so", null, 37, env)
+            assertTrue(env.contains("HYBRIS_VULKAN_HAL=/vendor/lib64/hw/vulkan.xring.so"))
+            assertTrue(env.contains("DROIDDECK_SYSTEM_VULKAN_GPU=mali"))
+            assertTrue(env.contains("DXVK_MALI_COMPAT=1"))
+            assertTrue(env.contains("DROIDDECK_HYBRIS_DXVK=dxvk-mali"))
+            assertTrue(env.contains("DROIDDECK_SYSTEM_VULKAN_PRESENTATION=x11-shm"))
+            // A still-unknown HAL keeps failing closed even while a discovery is recorded.
+            assertThrows(IllegalStateException::class.java) {
+                SystemVulkanDriver.addEnvironment(File("/runtime"), "/vendor/lib64/hw/vulkan.other.so", null, 37, mutableListOf())
+            }
+        } finally {
+            SystemVulkanDriver.discoveredMaliHal = null
+        }
+    }
+
     @Test fun defaultPowerVrUsesTheSystemBridge() {
         assertTrue(SystemVulkanDriver.usesDefault(true, ""))
         assertTrue(SystemVulkanDriver.usesDefault(true, null))

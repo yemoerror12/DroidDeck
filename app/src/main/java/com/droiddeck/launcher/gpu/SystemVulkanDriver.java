@@ -88,8 +88,83 @@ public final class SystemVulkanDriver {
 
     private SystemVulkanDriver() {}
 
+    /**
+     * HAL path discovered for a mali_kbase device whose vendor Vulkan HAL does not use one of
+     * the well-known names (for example Xiaomi XRING silicon). Null when no discovery ran or
+     * the candidates were ambiguous; only Mali policy is ever applied to it.
+     */
+    static volatile String discoveredMaliHal;
+
     public static Profile profile() {
-        return findProfile(path -> new File(path).isFile());
+        Profile selected = findProfile(path -> new File(path).isFile());
+        if (selected != null) return selected;
+        return discoverMaliProfile();
+    }
+
+    /**
+     * Some mali_kbase devices ship their vendor Vulkan HAL under a non-standard name, so the
+     * fixed per-vendor paths find nothing. Discovery only activates when the Mali kernel
+     * driver is present and exactly one unknown vendor HAL exists; anything ambiguous fails
+     * closed like an unknown HAL.
+     */
+    static Profile discoverMaliProfile() {
+        if (!maliKernelPresent()) return null;
+        String hal = scanVendorVulkanHal();
+        if (hal == null) return null;
+        discoveredMaliHal = hal;
+        return Profile.MALI;
+    }
+
+    /** Evidence that the device runs the Mali kernel driver (kbase or legacy). */
+    static boolean maliKernelPresent() {
+        return new File("/dev/mali0").isFile() || new File("/dev/mali").isFile()
+                || new File("/sys/module/mali_kbase").isDirectory()
+                || new File("/sys/module/mali").isDirectory();
+    }
+
+    /** HAL names that already belong to other vendors' profiles or are not hardware. */
+    private static final String[] NON_MALI_HALS = {
+        "adreno", "samsung", "powervr", "mtk", "mediatek", "swiftshader", "emulation", "angle",
+    };
+
+    /**
+     * Scan /vendor/lib64/hw for a single vendor Vulkan HAL outside the known names. More than
+     * one candidate is ambiguous and must not silently pick a vendor's quirks.
+     */
+    static String scanVendorVulkanHal() {
+        return scanVendorVulkanHal(new File("/vendor/lib64/hw"));
+    }
+
+    /** Injectable variant so the ambiguity policy can be tested on any directory. */
+    static String scanVendorVulkanHal(File directory) {
+        String[] files = directory.list();
+        if (files == null) return null;
+        String found = null;
+        for (String name : files) {
+            if (!name.startsWith("vulkan.") || !name.endsWith(".so")) continue;
+            String vendor = name.substring("vulkan.".length(), name.length() - ".so".length());
+            if (isKnownHalName(vendor)) continue;
+            File hal = new File(directory, name);
+            if (!hal.isFile()) continue;
+            if (found != null) return null;
+            found = hal.getPath();
+        }
+        return found;
+    }
+
+    static boolean isKnownHalName(String vendor) {
+        if (vendor == null) return false;
+        for (String known : NON_MALI_HALS) if (known.equals(vendor)) return true;
+        for (Profile profile : Profile.values())
+            if (profile.halPath.equals("/vendor/lib64/hw/vulkan." + vendor + ".so")) return true;
+        return false;
+    }
+
+    /** Resolve a HAL path back to its profile, including a discovered Mali HAL. */
+    static Profile resolveProfile(String hal) {
+        Profile selected = Profile.fromHal(hal);
+        if (selected == null && hal != null && hal.equals(discoveredMaliHal)) return Profile.MALI;
+        return selected;
     }
 
     /** An ambiguous HAL installation must not accidentally activate another vendor's quirks. */
@@ -105,7 +180,10 @@ public final class SystemVulkanDriver {
 
     public static String hal() {
         Profile selected = profile();
-        return selected == null ? null : selected.halPath;
+        if (selected == null) return null;
+        // A discovered HAL must be forwarded verbatim; the profile's fixed path may not exist.
+        if (selected == Profile.MALI && discoveredMaliHal != null) return discoveredMaliHal;
+        return selected.halPath;
     }
 
     public static String systemHalPath() { return hal(); }
@@ -339,7 +417,7 @@ public final class SystemVulkanDriver {
     }
 
     static void addEnvironment(File directory, String hal, String node, int sdk, List<String> environment) {
-        Profile selected = Profile.fromHal(hal);
+        Profile selected = resolveProfile(hal);
         if (selected == null) throw new IllegalStateException("System Vulkan driver is unavailable");
         if (selected.requiresRenderNode && node == null)
             throw new IllegalStateException("System " + selected.gpuName + " render node is unavailable");
