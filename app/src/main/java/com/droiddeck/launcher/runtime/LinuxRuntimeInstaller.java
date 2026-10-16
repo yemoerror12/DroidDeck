@@ -7,6 +7,7 @@ import android.util.Log;
 import com.droiddeck.launcher.R;
 import com.droiddeck.launcher.core.ArchivePaths;
 import com.droiddeck.launcher.core.Downloader;
+import com.droiddeck.launcher.core.GithubMirror;
 import com.droiddeck.launcher.core.Hashes;
 import com.droiddeck.launcher.core.FileUtils;
 
@@ -87,19 +88,23 @@ public final class LinuxRuntimeInstaller {
     }
 
     public static Release fetchRelease() {
-        String body = Downloader.downloadString(CATALOG_URL);
-        if (body == null || body.isEmpty()) return null;
-        try {
-            JSONObject json = new JSONObject(body);
-            String version = json.optString("version", "");
-            String url = json.optString("url", "");
-            String sha256 = json.optString("sha256", "");
-            if (version.isEmpty() || url.isEmpty() || sha256.isEmpty()) return null;
-            return new Release(version, url, sha256, json.optLong("size", 0L));
-        } catch (Exception e) {
-            Log.w(TAG, "catalog: " + e);
-            return null;
+        // GitHub can be unreachable from some networks; try the direct URL first,
+        // then mirror prefixes, and accept the first catalog that parses.
+        for (String candidate : GithubMirror.candidates(CATALOG_URL)) {
+            String body = Downloader.downloadString(candidate);
+            if (body == null || body.isEmpty()) continue;
+            try {
+                JSONObject json = new JSONObject(body);
+                String version = json.optString("version", "");
+                String url = json.optString("url", "");
+                String sha256 = json.optString("sha256", "");
+                if (version.isEmpty() || url.isEmpty() || sha256.isEmpty()) continue;
+                return new Release(version, url, sha256, json.optLong("size", 0L));
+            } catch (Exception e) {
+                Log.w(TAG, "catalog: " + e);
+            }
         }
+        return null;
     }
 
     private static final String USER_DATA = "root";
@@ -261,12 +266,21 @@ public final class LinuxRuntimeInstaller {
             emptyTrash(LinuxRuntime.rootDir(context).getParentFile());
             String downloading = context.getString(R.string.rtinst_downloading);
             if (listener != null) listener.onProgress(Step.DOWNLOADING, downloading, 0);
-            boolean ok = Downloader.downloadFile(release.url, archive, true, (fraction) -> {
-                if (listener != null) {
-                    listener.onProgress(Step.DOWNLOADING, downloading,
-                            fraction < 0 ? -1 : Math.round(fraction * 100f));
-                }
-            });
+            // Direct GitHub first, then mirror prefixes; a partial archive is kept so the
+            // next candidate resumes it, and the SHA-256 below still guards the result.
+            boolean ok = false;
+            for (String candidate : GithubMirror.candidates(release.url)) {
+                if (candidate != release.url && listener != null)
+                    listener.onProgress(Step.DOWNLOADING, downloading + " (mirror)", 0);
+                ok = Downloader.downloadFile(candidate, archive, true, (fraction) -> {
+                    if (listener != null) {
+                        listener.onProgress(Step.DOWNLOADING, downloading,
+                                fraction < 0 ? -1 : Math.round(fraction * 100f));
+                    }
+                });
+                if (ok) break;
+                Log.w(TAG, "download failed: " + candidate);
+            }
             if (!ok) {
                 Log.w(TAG, "download failed");
                 keepPartial = true;
