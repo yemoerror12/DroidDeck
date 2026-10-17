@@ -1,0 +1,19 @@
+diff --git a/hybris/common/bionic_tls.c b/hybris/common/bionic_tls.c
+--- a/hybris/common/bionic_tls.c
++++ b/hybris/common/bionic_tls.c
+@@ -90,8 +90,14 @@
+  * patcher emit one extra LDR in the thunk to dereference it -- that
+  * frees us from the IE-surplus cap entirely, at the cost of growing
+  * the thunk from 16 to 20 bytes and matching count_tls/THUNK_SIZE.
++ *
++ * Xiaomi XRING (G2-Ultra NX, Android 17): its vendor driver promotes a
++ * TLS module at offset 984 with memsz 41 -- exactly one word past the
++ * 1024 ceiling (984 + 41 > 1024), aborting before Steam ever starts.
++ * 1280 keeps the IE allocation inside typical glibc static-TLS surplus
++ * while leaving ~255 bytes of headroom for further vendor modules.
+  */
+-#define BIONIC_STATIC_TLS_SIZE   1024
++#define BIONIC_STATIC_TLS_SIZE   1280
+ #define BIONIC_TPIDR_OFFSET      8    /* matches StaticTlsLayout::offset_thread_pointer() with MIN_TLS_SLOT=-1 (bionic Q) */
+ #define BIONIC_TLS_PTR_OFFSET    0    /* slot -1 (TLS_SLOT_BIONIC_TLS) at TP-8 = 0 */
+ #define BIONIC_TLS_COMPAT_SIZE   16384
